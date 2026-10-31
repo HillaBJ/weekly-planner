@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>הלו״ז השבועי שלי</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- חלק עליון קבוע: ניווט בין שבועות + כותרות הימים -->
+  <header class="top">
+    <div class="toolbar">
+      <button id="btn-prev" class="btn" aria-label="שבוע קודם">‹ קודם</button>
+      <div class="week-title">
+        <button id="btn-today" class="btn btn-today">היום</button>
+        <span id="week-range"></span>
+      </div>
+      <button id="btn-next" class="btn" aria-label="שבוע הבא">הבא ›</button>
+    </div>
+    <div id="day-headers" class="grid-row day-headers"></div>
+  </header>
+
+  <!-- לוח השעות (נבנה ב-app.js) -->
+  <main id="board" class="grid-row board"></main>
+
+  <script src="app.js"></script>
+</body>
+</html>
