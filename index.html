@@ -26,6 +26,9 @@
           <button id="view-day" class="seg-btn" aria-pressed="false">יומי</button>
         </div>
         <div class="tools">
+          <button id="btn-copy-week" class="btn btn-small" aria-label="העתק שבוע קודם" title="העתק שבוע קודם">
+            <span class="lbl-long">העתק שבוע קודם</span><span class="lbl-short">⧉ שבוע קודם</span>
+          </button>
           <button id="btn-saved" class="btn btn-icon" aria-label="הבלוקים שלי" title="הבלוקים שלי">★</button>
           <button id="btn-settings" class="btn btn-icon btn-gear" aria-label="הגדרות" title="הגדרות">⚙</button>
         </div>
@@ -58,6 +61,15 @@
         <label class="field">התחלה <select id="f-start"></select></label>
         <label class="field">סיום <select id="f-end"></select></label>
       </div>
+
+      <!-- בלוק חוזר: בבלוק חדש/רגיל תיבת סימון; בבלוק שכבר בסדרה — הסבר ותאריך סיום -->
+      <label id="repeat-field" class="check-field">
+        <input id="f-repeat" type="checkbox"> חוזר כל שבוע
+      </label>
+      <p id="series-info" class="hint series-info" hidden>🔁 הבלוק הזה חלק מסדרה שבועית.</p>
+      <label id="until-field" class="field" hidden>עד תאריך (כולל)
+        <input id="f-until" type="date">
+      </label>
 
       <div class="field">צבע
         <div class="color-row">
@@ -172,6 +184,15 @@
       <div class="actions actions-close">
         <button id="pick-close" type="button" class="btn">סגור</button>
       </div>
+    </div>
+  </div>
+
+  <!-- שאלה עם כמה אפשרויות (בלוק חוזר: רק זה / זה והבאים / כל הסדרה; העתקת שבוע) -->
+  <div id="choice-modal" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="choice-title">
+      <h2 id="choice-title"></h2>
+      <p id="choice-text" class="hint" hidden></p>
+      <div id="choice-list" class="choice-list"></div>
     </div>
   </div>
 

@@ -158,6 +158,7 @@ function render() {
       ? `${weekStart.getDate()}–${monthName.format(lastDay)}`
       : `${monthShort.format(weekStart)} – ${monthShort.format(lastDay)}`;
   }
+  document.getElementById("btn-copy-week").hidden = viewMode !== "week";   // העתקת שבוע: רק בתצוגה שבועית
   document.getElementById("btn-prev").setAttribute("aria-label", viewMode === "day" ? "יום קודם" : "שבוע קודם");
   document.getElementById("btn-next").setAttribute("aria-label", viewMode === "day" ? "יום הבא" : "שבוע הבא");
   document.getElementById("view-week").setAttribute("aria-pressed", viewMode === "week");
@@ -343,6 +344,12 @@ function createBlockElement(block, rangeStart, rangeEnd, place = { lane: 0, lane
   const title = document.createElement("span");
   title.className = "b-title";
   title.textContent = block.title;
+  if (block.seriesId && place.lanes <= 2) {   // 🔁 = חלק מסדרה שבועית (בנתיבים צרים מאוד אין מקום)
+    const icon = document.createElement("i");
+    icon.className = "series-icon";
+    icon.textContent = "🔁";
+    title.prepend(icon);
+  }
   el.appendChild(title);
 
   // פרטים נוספים: מוצגים רק בטלפון לרוחב / במחשב (נקבע ב-CSS)
@@ -541,6 +548,11 @@ const btnFav = document.getElementById("btn-fav");
 const savedPicker = document.getElementById("saved-picker");
 const fDone = document.getElementById("f-done");
 const doneField = document.getElementById("done-field");
+const fRepeat = document.getElementById("f-repeat");
+const fUntil = document.getElementById("f-until");
+const repeatField = document.getElementById("repeat-field");
+const untilField = document.getElementById("until-field");
+const seriesInfo = document.getElementById("series-info");
 
 // פותח את החלון. block = בלוק קיים לעריכה, או תאריך+שעה לבלוק חדש.
 function openModal({ block = null, date = null, start = null } = {}) {
@@ -598,6 +610,16 @@ function openModal({ block = null, date = null, start = null } = {}) {
   markSelectedColor();
   renderSavedPicker();
 
+  // בלוק חוזר: בלוק רגיל מקבל תיבת "חוזר כל שבוע"; בלוק שכבר בסדרה — הסבר ותאריך הסיום של הסדרה
+  const series = block && block.seriesId ? ensureSeries(block.seriesId) : null;
+  fRepeat.checked = false;
+  repeatField.hidden = !!series;
+  seriesInfo.hidden = !series;
+  untilField.hidden = !series;
+  fUntil.value = series ? series.untilDate : "";
+  fUntil.min = fDate.value;
+  lastStartMin = toMinutes(fStart.value);          // כדי ששינוי שעת התחלה ישמור את אורך הבלוק
+
   modal.hidden = false;
   if (!block) fTitle.focus();
 }
@@ -618,8 +640,11 @@ fStart.addEventListener("change", () => {
   lastStartMin = newStart;
 });
 
+fRepeat.addEventListener("change", () => { untilField.hidden = !fRepeat.checked; });
+fDate.addEventListener("change", () => { fUntil.min = fDate.value; });
+
 // שמירה
-form.addEventListener("submit", (e) => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const title = fTitle.value.trim();
   if (!title) { fError.textContent = "צריך לכתוב כותרת"; fTitle.focus(); return; }
@@ -637,10 +662,23 @@ form.addEventListener("submit", (e) => {
     note: fNote.value.trim(),
   };
 
-  if (editingId) {
-    Object.assign(data.blocks.find((b) => b.id === editingId), values, { done: fDone.checked });
+  const existing = editingId ? data.blocks.find((b) => b.id === editingId) : null;
+
+  if (existing && existing.seriesId) {
+    // בלוק שכבר בסדרה: בודקים את תאריך הסיום, שואלים על מה להחיל, ואז מעדכנים
+    const err = validateUntil(values.date, fUntil.value, seriesBlocks(existing.seriesId)[0].date);
+    if (err) { fError.textContent = err; return; }
+    const ok = await saveSeriesEdit(existing, values, fDone.checked, fUntil.value);
+    if (!ok) return;                       // ביטלו בשאלה — החלון נשאר פתוח
   } else {
-    data.blocks.push({ id: newId(), ...values, done: false, seriesId: "" });
+    if (fRepeat.checked) {
+      const err = validateUntil(values.date, fUntil.value, values.date);
+      if (err) { fError.textContent = err; return; }
+    }
+    const block = existing || { id: newId(), done: false, seriesId: "" };
+    Object.assign(block, values, existing ? { done: fDone.checked } : {});
+    if (!existing) data.blocks.push(block);
+    if (fRepeat.checked) makeSeries(block, fUntil.value);
   }
   saveData();
   closeModal();
@@ -674,15 +712,27 @@ toastUndo.addEventListener("click", () => {
   hideToast();
 });
 
-btnDelete.addEventListener("click", () => {
-  const index = data.blocks.findIndex((b) => b.id === editingId);
-  if (index < 0) return;
-  const [removed] = data.blocks.splice(index, 1);
+btnDelete.addEventListener("click", async () => {
+  const block = data.blocks.find((b) => b.id === editingId);
+  if (!block) return;
+
+  // בלוק חוזר: שואלים מה למחוק
+  let scope = "one";
+  if (block.seriesId) {
+    scope = await askScope("מה למחוק?");
+    if (!scope) return;
+  }
+
+  const removed = removeScoped(block, scope);
   saveData();
   closeModal();
   render();
-  showToast("הבלוק נמחק", () => {
-    data.blocks.push(removed);
+  showToast(removed.blocks.length > 1 ? `${removed.blocks.length} בלוקים נמחקו` : "הבלוק נמחק", () => {
+    data.blocks.push(...removed.blocks);
+    if (removed.series) {                      // מחזירים גם את הסדרה כפי שהייתה
+      const current = data.series.find((s) => s.id === removed.series.id);
+      if (current) Object.assign(current, removed.series); else data.series.push(removed.series);
+    }
     saveData();
     render();
   });
@@ -855,13 +905,15 @@ function onDragEnd(e) {
   if (drag.mode === "new") { finishNewDrag(); return; }
   if (drag.active && drag.target) {
     const { block, target } = drag;
-    if (target.date !== block.date || target.start !== block.start || target.end !== block.end) {
+    const changed = target.date !== block.date || target.start !== block.start || target.end !== block.end;
+    holdClick();
+    endDrag();
+    if (changed && !block.seriesId) {
       Object.assign(block, target);
       saveData();
     }
-    holdClick();
-    endDrag();
-    render();
+    render();                                    // מצייר את המצב השמור (בלוק בסדרה חוזר למקומו עד שיוחלט)
+    if (changed && block.seriesId) commitSeriesDrag(block, target);
     return;
   }
   endDrag();
@@ -1206,6 +1258,7 @@ modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); }
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (drag) onDragCancel();          // באמצע גרירה: מבטלים אותה
+  else if (!choiceModal.hidden) choiceCancel();
   else if (!pickModal.hidden) pickModal.hidden = true;
   else if (!settingsModal.hidden) closeSettings();
   else if (!savedModal.hidden) closeSavedModal();
@@ -1421,5 +1474,239 @@ importFile.addEventListener("change", async () => {
   replaceAllData(next);
   showToast(next.skipped ? `הנתונים יובאו (${next.skipped} פריטים דולגו)` : "הנתונים יובאו", () => replaceAllData(before));
 });
+
+// ---------- שאלה עם כמה אפשרויות ----------
+
+const choiceModal = document.getElementById("choice-modal");
+let choiceCancel = () => {};
+
+// מציג שאלה עם כפתורים. מחזיר Promise עם ה-id של האפשרות שנבחרה, או null אם ביטלו (ביטול / Escape / לחיצה על הרקע).
+function askChoice(title, options, text = "") {
+  return new Promise((resolve) => {
+    document.getElementById("choice-title").textContent = title;
+    const textEl = document.getElementById("choice-text");
+    textEl.textContent = text;
+    textEl.hidden = !text;
+
+    const list = document.getElementById("choice-list");
+    list.innerHTML = "";
+    const finish = (value) => {
+      choiceModal.hidden = true;
+      choiceCancel = () => {};
+      resolve(value);
+    };
+    for (const opt of options) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn" + (opt.danger ? " btn-danger" : "");
+      btn.textContent = opt.label;
+      btn.addEventListener("click", () => finish(opt.id));
+      list.appendChild(btn);
+    }
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn btn-plain";
+    cancel.textContent = "ביטול";
+    cancel.addEventListener("click", () => finish(null));
+    list.appendChild(cancel);
+
+    choiceCancel = () => finish(null);
+    choiceModal.hidden = false;
+  });
+}
+choiceModal.addEventListener("click", (e) => { if (e.target === choiceModal) choiceCancel(); });
+
+// שאלה קבועה לבלוק חוזר: על מה להחיל
+function askScope(title) {
+  return askChoice(title, [
+    { id: "one", label: "רק המופע הזה" },
+    { id: "following", label: "המופע הזה וכל הבאים אחריו" },
+    { id: "all", label: "כל הסדרה" },
+  ]);
+}
+
+// ---------- בלוקים חוזרים ----------
+// כל מופע הוא בלוק נפרד עם אותו seriesId. data.series מחזיק לכל סדרה את תאריך הסיום שלה.
+
+const MAX_SERIES_WEEKS = 104;   // עד שנתיים בסדרה אחת
+
+// מספר ימים בין שני תאריכים (YYYY-MM-DD). לא מושפע ממעבר שעון קיץ/חורף.
+function daysBetween(fromKey, toKey) {
+  const day = (k) => { const [y, m, d] = k.split("-").map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+  return Math.round(day(toKey) - day(fromKey));
+}
+function shiftKey(key, n) { return dateKey(addDays(parseKey(key), n)); }
+
+// כל המופעים של סדרה, לפי תאריך ושעה
+function seriesBlocks(seriesId) {
+  return data.blocks
+    .filter((b) => b.seriesId === seriesId)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
+}
+
+// רשומת הסדרה. אם חסרה (למשל אחרי ייבוא) — יוצרים אותה לפי המופע האחרון.
+function ensureSeries(seriesId) {
+  let s = data.series.find((x) => x.id === seriesId);
+  if (!s) {
+    const items = seriesBlocks(seriesId);
+    s = { id: seriesId, untilDate: items.length ? items[items.length - 1].date : dateKey(new Date()) };
+    data.series.push(s);
+  }
+  return s;
+}
+
+// בדיקת תאריך הסיום. מחזיר הודעת שגיאה, או "" אם תקין. firstDate = תאריך המופע הראשון בסדרה.
+function validateUntil(blockDate, untilKey, firstDate) {
+  if (!untilKey) return "צריך לבחור תאריך סיום לסדרה";
+  if (untilKey < blockDate) return "תאריך הסיום לא יכול להיות לפני תאריך הבלוק";
+  if (Math.floor(daysBetween(firstDate, untilKey) / 7) + 1 > MAX_SERIES_WEEKS) {
+    return "אפשר ליצור סדרה של עד שנתיים (104 שבועות)";
+  }
+  return "";
+}
+
+// הופך בלוק לתחילת סדרה שבועית: יוצר מופע לכל שבוע עד תאריך הסיום (כולל)
+function makeSeries(first, untilKey) {
+  const seriesId = newId();
+  first.seriesId = seriesId;
+  data.series.push({ id: seriesId, untilDate: untilKey });
+  addWeeklyCopies(first, untilKey);
+}
+
+// מוסיף עותקים שבועיים של הבלוק (בלי הבלוק עצמו) עד תאריך הסיום
+function addWeeklyCopies(from, untilKey) {
+  for (let key = shiftKey(from.date, 7); key <= untilKey; key = shiftKey(key, 7)) {
+    data.blocks.push({ ...from, id: newId(), date: key, done: false });
+  }
+}
+
+// אילו בלוקים נכללים בבחירה: רק זה / זה והבאים אחריו / כל הסדרה
+function scopedBlocks(block, scope) {
+  if (scope === "one") return [block];
+  const items = seriesBlocks(block.seriesId);
+  return scope === "all" ? items : items.filter((b) => b.date >= block.date);
+}
+
+// מוחק לפי הבחירה. מחזיר מה שנמחק (כדי לאפשר "בטל").
+function removeScoped(block, scope) {
+  const seriesId = block.seriesId;
+  const prevSeries = seriesId ? { ...ensureSeries(seriesId) } : null;
+  const targets = scopedBlocks(block, scope);
+  const ids = new Set(targets.map((b) => b.id));
+  data.blocks = data.blocks.filter((b) => !ids.has(b.id));
+
+  if (seriesId) {
+    const left = seriesBlocks(seriesId);
+    if (!left.length) data.series = data.series.filter((s) => s.id !== seriesId);
+    else if (scope === "following") ensureSeries(seriesId).untilDate = left[left.length - 1].date;
+  }
+  return { blocks: targets, series: prevSeries };
+}
+
+// מחיל שינויים על המופעים שנבחרו. changes = רק מה ששונה (title/color/note/start/end), dayDelta = כמה ימים הוזז.
+function applySeriesChange(orig, block, scope, changes, dayDelta) {
+  const targets = scope === "one" ? [block] : scopedBlocks(orig, scope);   // לפני שמשנים תאריכים (orig הוא עותק, block הוא הבלוק האמיתי)
+  for (const b of targets) {
+    for (const k of ["title", "color", "note"]) if (k in changes) b[k] = changes[k];
+    if ("start" in changes || "end" in changes) {
+      const start = changes.start ?? b.start;
+      const end = changes.end ?? b.end;
+      if (toMinutes(end) > toMinutes(start)) { b.start = start; b.end = end; }   // מופע שהשינוי היה הופך אותו ללא תקין — נשאר כמו שהיה
+    }
+    if (dayDelta) b.date = shiftKey(b.date, dayDelta);
+  }
+  // אם הזזנו מופע אחרי תאריך הסיום — הסדרה מתארכת אליו
+  const items = seriesBlocks(orig.seriesId);
+  const series = ensureSeries(orig.seriesId);
+  if (items.length && items[items.length - 1].date > series.untilDate) series.untilDate = items[items.length - 1].date;
+}
+
+// משנה את תאריך הסיום של סדרה: הארכה יוצרת את המופעים החסרים (לפי המופע האחרון), קיצור מוחק את מה שאחרי התאריך
+function setSeriesUntil(seriesId, untilKey) {
+  const series = ensureSeries(seriesId);
+  data.blocks = data.blocks.filter((b) => !(b.seriesId === seriesId && b.date > untilKey));
+  const items = seriesBlocks(seriesId);
+  if (items.length) addWeeklyCopies(items[items.length - 1], untilKey);
+  series.untilDate = untilKey;
+}
+
+// שמירת עריכה של בלוק בסדרה. מחזיר false אם המשתמשת ביטלה בשאלה.
+async function saveSeriesEdit(block, values, doneChecked, untilKey) {
+  const orig = { ...block };
+  const untilBefore = ensureSeries(orig.seriesId).untilDate;   // לפני שהזזת מופעים עלולה להאריך אותו
+  const changes = {};
+  for (const k of ["title", "color", "note", "start", "end"]) if (values[k] !== orig[k]) changes[k] = values[k];
+  const dayDelta = daysBetween(orig.date, values.date);
+
+  let scope = "one";
+  if (Object.keys(changes).length || dayDelta) {
+    scope = await askScope("להחיל את השינוי על:");
+    if (!scope) return false;
+  }
+  applySeriesChange(orig, block, scope, changes, dayDelta);
+  block.done = doneChecked;                           // "בוצע" תמיד רק למופע הזה
+
+  if (untilKey !== untilBefore) setSeriesUntil(orig.seriesId, untilKey);   // המשתמשת שינתה את תאריך הסיום
+  return true;
+}
+
+// גרירה / שינוי אורך של בלוק בסדרה: שואלים אחרי השחרור. אם מבטלים — הבלוק נשאר במקומו.
+async function commitSeriesDrag(block, target) {
+  await new Promise((r) => setTimeout(r, 200));       // נותנים ללחיצה שאחרי השחרור לעבור לפני שהשאלה נפתחת
+  const scope = await askScope("להחיל את השינוי על:");
+  if (!scope) return;
+  const orig = { ...block };
+  const changes = {};
+  if (target.start !== orig.start) changes.start = target.start;
+  if (target.end !== orig.end) changes.end = target.end;
+  applySeriesChange(orig, block, scope, changes, daysBetween(orig.date, target.date));
+  saveData();
+  render();
+}
+
+// ---------- העתקת שבוע קודם ----------
+
+document.getElementById("btn-copy-week").addEventListener("click", copyPreviousWeek);
+
+async function copyPreviousWeek() {
+  const weekKeys = (start) => Array.from({ length: 7 }, (_, i) => dateKey(addDays(start, i)));
+  const prevKeys = weekKeys(addDays(weekStart, -7));
+  const curKeys = weekKeys(weekStart);
+
+  // רק בלוקים רגילים: בלוקים חוזרים כבר מופיעים בשבוע הזה מעצמם
+  const source = data.blocks.filter((b) => !b.seriesId && prevKeys.includes(b.date));
+  if (!source.length) { showToast("אין בלוקים להעתקה בשבוע הקודם"); return; }
+
+  const existing = data.blocks.filter((b) => !b.seriesId && curKeys.includes(b.date));
+  let mode = "add";
+  if (existing.length) {
+    mode = await askChoice("בשבוע הזה כבר יש בלוקים", [
+      { id: "add", label: "הוסף לבלוקים הקיימים" },
+      { id: "replace", label: "החלף את כל הבלוקים בשבוע הזה", danger: true },
+    ], "בלוקים חוזרים לא יימחקו.");
+    if (!mode) return;
+  }
+
+  const replaced = mode === "replace" ? existing : [];
+  if (replaced.length) {
+    const ids = new Set(replaced.map((b) => b.id));
+    data.blocks = data.blocks.filter((b) => !ids.has(b.id));
+  }
+  const copies = source.map((b) => ({
+    id: newId(), title: b.title, date: shiftKey(b.date, 7), start: b.start, end: b.end,
+    color: b.color, note: b.note || "", done: false, seriesId: "",
+  }));
+  data.blocks.push(...copies);
+  saveData();
+  render();
+
+  const copyIds = new Set(copies.map((b) => b.id));
+  showToast("השבוע הועתק", () => {
+    data.blocks = data.blocks.filter((b) => !copyIds.has(b.id));
+    data.blocks.push(...replaced);
+    saveData();
+    render();
+  });
+}
 
 render();

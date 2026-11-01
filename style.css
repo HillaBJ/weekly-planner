@@ -498,3 +498,20 @@ body.view-day .day-head { font-size: 1rem; }
   background: var(--surface); color: var(--text); font: inherit; text-align: start; cursor: pointer;
 }
 .pick-time { margin-inline-start: auto; color: var(--muted); font-size: 0.85rem; direction: ltr; unicode-bidi: isolate; }
+
+/* ===== שלב 6: בלוקים חוזרים והעתקת שבוע ===== */
+.series-icon { font-style: normal; font-size: 0.8em; margin-inline-end: 2px; }
+.series-info { margin: 0 0 10px; }
+
+.choice-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.choice-list .btn { width: 100%; }
+.btn-plain { border-color: transparent; color: var(--muted); }
+
+/* כפתור "העתק שבוע קודם": תווית קצרה בטלפון לאורך */
+.lbl-short { display: none; }
+.tools .btn-small { padding: 0 10px; white-space: nowrap; }
+@media (max-width: 499px) and (orientation: portrait) {
+  .lbl-long { display: none; }
+  .lbl-short { display: inline; }
+  .tools { gap: 4px; }
+}
