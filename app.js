@@ -1710,3 +1710,11 @@ async function copyPreviousWeek() {
 }
 
 render();
+
+// ---------- עבודה בלי אינטרנט (PWA) ----------
+// רושמים את ה-service worker רק כשהאפליקציה נפתחת מכתובת אינטרנט (לא בלחיצה כפולה על הקובץ).
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("service-worker.js").catch(() => { /* האפליקציה עובדת גם בלי זה */ });
+  });
+}
