@@ -23,6 +23,51 @@
   <!-- לוח השעות (נבנה ב-app.js) -->
   <main id="board" class="grid-row board"></main>
 
+  <!-- חלון יצירה / עריכה של בלוק -->
+  <div id="modal" class="modal" hidden>
+    <form id="block-form" class="sheet" novalidate>
+      <h2 id="modal-title">בלוק חדש</h2>
+
+      <label class="field">כותרת
+        <input id="f-title" type="text" maxlength="80" autocomplete="off">
+      </label>
+
+      <label class="field">יום
+        <select id="f-date"></select>
+      </label>
+
+      <div class="field-row">
+        <label class="field">התחלה <select id="f-start"></select></label>
+        <label class="field">סיום <select id="f-end"></select></label>
+      </div>
+
+      <div class="field">צבע
+        <div class="color-row">
+          <div id="f-palette" class="palette"></div>
+          <label class="free-color">חופשי <input id="f-color" type="color" value="#5b8def"></label>
+        </div>
+      </div>
+
+      <label class="field">הערה (לא חובה)
+        <textarea id="f-note" rows="3" maxlength="500"></textarea>
+      </label>
+
+      <p id="f-error" class="error" role="alert"></p>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">שמור</button>
+        <button type="button" id="btn-cancel" class="btn">ביטול</button>
+        <button type="button" id="btn-delete" class="btn btn-danger" hidden>מחק</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- הודעה קטנה למטה: "הבלוק נמחק — בטל" -->
+  <div id="toast" class="toast" role="status" hidden>
+    <span id="toast-text"></span>
+    <button id="toast-undo" type="button" class="toast-undo">בטל</button>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>
