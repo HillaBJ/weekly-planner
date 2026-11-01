@@ -9,16 +9,30 @@
 <body>
   <!-- חלק עליון קבוע: ניווט בין שבועות + כותרות הימים -->
   <header class="top">
-    <div class="toolbar">
-      <button id="btn-prev" class="btn" aria-label="שבוע קודם">‹<span class="lbl"> קודם</span></button>
-      <div class="week-title">
-        <button id="btn-today" class="btn btn-today">היום</button>
-        <span id="week-range"></span>
+    <div class="bars">
+      <!-- שורה 1: ניווט -->
+      <div class="toolbar">
+        <button id="btn-prev" class="btn" aria-label="קודם">‹<span class="lbl"> קודם</span></button>
+        <div class="week-title">
+          <button id="btn-today" class="btn btn-today">היום</button>
+          <span id="week-range"></span>
+        </div>
+        <button id="btn-next" class="btn" aria-label="הבא"><span class="lbl">הבא </span>›</button>
       </div>
-      <button id="btn-saved" class="btn btn-icon" aria-label="הבלוקים שלי" title="הבלוקים שלי">★</button>
-      <button id="btn-next" class="btn" aria-label="שבוע הבא"><span class="lbl">הבא </span>›</button>
+      <!-- שורה 2: תצוגה (שבועי/יומי), הבלוקים שלי, הגדרות. במסך רחב היא באותה שורה. -->
+      <div class="toolbar toolbar-tools">
+        <div class="seg" role="group" aria-label="תצוגה">
+          <button id="view-week" class="seg-btn" aria-pressed="true">שבועי</button>
+          <button id="view-day" class="seg-btn" aria-pressed="false">יומי</button>
+        </div>
+        <div class="tools">
+          <button id="btn-saved" class="btn btn-icon" aria-label="הבלוקים שלי" title="הבלוקים שלי">★</button>
+          <button id="btn-settings" class="btn btn-icon btn-gear" aria-label="הגדרות" title="הגדרות">⚙</button>
+        </div>
+      </div>
     </div>
     <div id="day-headers" class="grid-row day-headers"></div>
+    <button id="hidden-note" class="hidden-note" type="button" hidden></button>
   </header>
 
   <!-- לוח השעות (נבנה ב-app.js) -->
@@ -54,6 +68,10 @@
 
       <label class="field">הערה (לא חובה)
         <textarea id="f-note" rows="3" maxlength="500"></textarea>
+      </label>
+
+      <label id="done-field" class="check-field" hidden>
+        <input id="f-done" type="checkbox"> בוצע
       </label>
 
       <p id="f-error" class="error" role="alert"></p>
@@ -110,6 +128,51 @@
         <button type="button" id="s-cancel" class="btn">ביטול</button>
       </div>
     </form>
+  </div>
+
+  <!-- הגדרות וגיבוי -->
+  <div id="settings-modal" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="settings-title">
+      <h2 id="settings-title">הגדרות</h2>
+
+      <div class="field-row">
+        <label class="field">שעת התחלה <select id="st-start"></select></label>
+        <label class="field">שעת סיום <select id="st-end"></select></label>
+      </div>
+      <label class="field">גודל משבצת
+        <select id="st-slot">
+          <option value="15">15 דקות</option>
+          <option value="30">30 דקות</option>
+          <option value="60">שעה</option>
+        </select>
+      </label>
+      <label class="check-field">
+        <input id="st-weekend" type="checkbox"> הצגת שישי ושבת
+      </label>
+
+      <h3 class="section-title">גיבוי</h3>
+      <p class="hint">ניקוי נתוני הדפדפן מוחק את הלו״ז. כדאי לייצא קובץ גיבוי מדי פעם. אפשר גם להעביר נתונים בין הטלפון למחשב בייצוא וייבוא.</p>
+      <div class="actions">
+        <button id="btn-export" type="button" class="btn">ייצוא לקובץ</button>
+        <button id="btn-import" type="button" class="btn">ייבוא מקובץ</button>
+      </div>
+      <input id="import-file" type="file" accept=".json,application/json" hidden>
+
+      <div class="actions actions-close">
+        <button id="st-close" type="button" class="btn btn-primary">סגור</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- בחירת בלוק מתוך כמה (בלוקים מחוץ לטווח השעות) -->
+  <div id="pick-modal" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="pick-title">
+      <h2 id="pick-title"></h2>
+      <div id="pick-list" class="pick-list"></div>
+      <div class="actions actions-close">
+        <button id="pick-close" type="button" class="btn">סגור</button>
+      </div>
+    </div>
   </div>
 
   <!-- הודעה קטנה למטה: "הבלוק נמחק — בטל" -->

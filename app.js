@@ -57,6 +57,12 @@ const DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמיש
 // השבוע המוצג: התאריך של יום ראשון באותו שבוע
 let weekStart = getSunday(new Date());
 
+// תצוגה: "week" = שבועית, "day" = יומית (currentDay = היום המוצג בתצוגה היומית)
+let viewMode = "week";
+let currentDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+let lastRenderedDay = "";   // כדי לזהות מעבר חצות ולצייר מחדש
+let swipe = null;           // מעקב אחרי החלקה בין ימים (תצוגה יומית)
+
 // ---------- פונקציות עזר לתאריכים ----------
 
 // מחזיר את יום ראשון של השבוע שבו נמצא התאריך (בשעה 00:00)
@@ -104,44 +110,155 @@ function newId() { return Date.now().toString(36) + Math.random().toString(36).s
 const monthDay = new Intl.DateTimeFormat("he-IL", { day: "numeric", month: "numeric" });
 const monthName = new Intl.DateTimeFormat("he-IL", { day: "numeric", month: "long" });
 const monthShort = new Intl.DateTimeFormat("he-IL", { day: "numeric", month: "short" });
+const dayLong = new Intl.DateTimeFormat("he-IL", { weekday: "long", day: "numeric", month: "long" });
+
+// ---------- אילו ימים מוצגים ----------
+
+// שישי/שבת מוסתרים בהגדרות?
+function isHiddenDay(date) { return !settings.showWeekend && date.getDay() >= 5; }
+
+// אם התאריך נופל על יום מוסתר — מחזיר את יום חמישי שלפניו
+function clampToVisible(date) {
+  if (!isHiddenDay(date)) return date;
+  return addDays(date, date.getDay() === 5 ? -1 : -2);
+}
+
+// הצעד הבא/הקודם בתצוגה יומית (מדלג על ימים מוסתרים)
+function stepDay(date, dir) {
+  let d = addDays(date, dir);
+  while (isHiddenDay(d)) d = addDays(d, dir);
+  return d;
+}
+
+// התאריכים שמוצגים עכשיו כעמודות
+function visibleDates() {
+  if (viewMode === "day") return [currentDay];
+  return Array.from({ length: settings.showWeekend ? 7 : 5 }, (_, i) => addDays(weekStart, i));
+}
 
 // ---------- בניית המסך ----------
 
 function render() {
-  const dayCount = settings.showWeekend ? 7 : 5;
   const today = new Date();
+  const dates = visibleDates();
 
   // כמה עמודות יש ברשת
-  document.documentElement.style.setProperty("--days", dayCount);
+  document.documentElement.style.setProperty("--days", dates.length);
+  document.body.classList.toggle("view-day", viewMode === "day");
 
-  // כותרת: טווח התאריכים של השבוע
-  const lastDay = addDays(weekStart, dayCount - 1);
-  // באותו חודש: "25–29 באוקטובר". בין חודשים: "30 באוק׳ – 3 בנוב׳"
-  const sameMonth = weekStart.getMonth() === lastDay.getMonth();
-  document.getElementById("week-range").textContent = sameMonth
-    ? `${weekStart.getDate()}–${monthName.format(lastDay)}`
-    : `${monthShort.format(weekStart)} – ${monthShort.format(lastDay)}`;
+  // כותרת: טווח התאריכים של השבוע, או היום המוצג
+  const titleEl = document.getElementById("week-range");
+  if (viewMode === "day") {
+    titleEl.textContent = dayLong.format(currentDay);
+  } else {
+    // באותו חודש: "25–29 באוקטובר". בין חודשים: "30 באוק׳ – 3 בנוב׳"
+    const lastDay = dates[dates.length - 1];
+    const sameMonth = weekStart.getMonth() === lastDay.getMonth();
+    titleEl.textContent = sameMonth
+      ? `${weekStart.getDate()}–${monthName.format(lastDay)}`
+      : `${monthShort.format(weekStart)} – ${monthShort.format(lastDay)}`;
+  }
+  document.getElementById("btn-prev").setAttribute("aria-label", viewMode === "day" ? "יום קודם" : "שבוע קודם");
+  document.getElementById("btn-next").setAttribute("aria-label", viewMode === "day" ? "יום הבא" : "שבוע הבא");
+  document.getElementById("view-week").setAttribute("aria-pressed", viewMode === "week");
+  document.getElementById("view-day").setAttribute("aria-pressed", viewMode === "day");
 
-  renderDayHeaders(dayCount, today);
-  renderBoard(dayCount, today);
+  renderDayHeaders(dates, today);
+  renderBoard(dates, today);
+  renderHiddenNote();
+  lastRenderedDay = dateKey(today);
+  updateNowLine();
+}
+
+// בלוקים של יום מסוים שנמצאים כולם לפני / אחרי טווח השעות של הלוח
+function outOfRangeBlocks(key) {
+  const rangeStart = toMinutes(settings.dayStart);
+  const rangeEnd = toMinutes(settings.dayEnd);
+  const dayBlocks = data.blocks.filter((b) => b.date === key);
+  return {
+    before: dayBlocks.filter((b) => toMinutes(b.end) <= rangeStart),
+    after: dayBlocks.filter((b) => toMinutes(b.start) >= rangeEnd),
+  };
 }
 
 // שורת הכותרות: שם היום + תאריך. היום הנוכחי מודגש.
-function renderDayHeaders(dayCount, today) {
+// אם יש בלוקים מחוץ לטווח השעות — מופיע סימון "⬆ 1" / "⬇ 2" שפותח אותם.
+function renderDayHeaders(dates, today) {
   const row = document.getElementById("day-headers");
   row.innerHTML = "<div></div>"; // תא ריק מעל עמודת השעות
 
-  for (let i = 0; i < dayCount; i++) {
-    const date = addDays(weekStart, i);
+  for (const date of dates) {
     const head = document.createElement("div");
-    head.className = "day-head" + (isSameDay(date, today) ? " today" : "");
-    head.innerHTML = `${DAY_NAMES[i]}<span class="date">${monthDay.format(date)}</span>`;
+    head.className = "day-head" + (isSameDay(date, today) ? " today" : "") + (viewMode === "week" ? " clickable" : "");
+    head.append(document.createTextNode(DAY_NAMES[date.getDay()]));
+    const dateEl = document.createElement("span");
+    dateEl.className = "date";
+    dateEl.textContent = monthDay.format(date);
+    head.appendChild(dateEl);
+
+    const { before, after } = outOfRangeBlocks(dateKey(date));
+    if (before.length) head.appendChild(makeOutOfRangeButton("⬆", before, "לפני שעות הלוח"));
+    if (after.length) head.appendChild(makeOutOfRangeButton("⬇", after, "אחרי שעות הלוח"));
+
+    // לחיצה על שם היום (בתצוגה שבועית) פותחת אותו בתצוגה יומית
+    head.addEventListener("click", () => {
+      if (viewMode !== "week") return;
+      currentDay = date;
+      viewMode = "day";
+      render();
+    });
     row.appendChild(head);
   }
 }
 
+function makeOutOfRangeButton(arrow, list, where) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "oor";
+  btn.textContent = `${arrow} ${list.length}`;
+  btn.setAttribute("aria-label", `${list.length} בלוקים ${where}`);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pickBlock(list, `בלוקים ${where}`);
+  });
+  return btn;
+}
+
+// שורת תזכורת: יש בלוקים בשישי–שבת אבל הם מוסתרים בהגדרות
+function renderHiddenNote() {
+  const note = document.getElementById("hidden-note");
+  let count = 0;
+  if (viewMode === "week" && !settings.showWeekend) {
+    const keys = [dateKey(addDays(weekStart, 5)), dateKey(addDays(weekStart, 6))];
+    count = data.blocks.filter((b) => keys.includes(b.date)).length;
+  }
+  note.hidden = count === 0;
+  if (count) note.textContent = `יש ${count === 1 ? "בלוק אחד" : count + " בלוקים"} בשישי–שבת (מוסתרים) · הצג`;
+}
+
+// קו אדום דק בשעה הנוכחית (רק בעמודה של היום, ורק אם השעה בתוך טווח הלוח)
+function updateNowLine() {
+  document.querySelectorAll(".now-line").forEach((l) => l.remove());
+  const now = new Date();
+  const rangeStart = toMinutes(settings.dayStart);
+  const rangeEnd = toMinutes(settings.dayEnd);
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const col = document.querySelector(`.day-col[data-date="${dateKey(now)}"]`);
+  if (!col || minutes < rangeStart || minutes > rangeEnd) return;
+  const line = document.createElement("div");
+  line.className = "now-line";
+  line.style.top = `calc(var(--slot-h) / 15 * ${minutes - rangeStart})`;
+  col.appendChild(line);
+}
+
+// כל חצי דקה: מזיזים את קו "עכשיו", ואחרי חצות מציירים מחדש כדי שהיום החדש יודגש
+setInterval(() => {
+  if (dateKey(new Date()) !== lastRenderedDay && !drag) render();
+  else updateNowLine();
+}, 30000);
+
 // לוח השעות: עמודת שעות + משבצות זמן לכל יום
-function renderBoard(dayCount, today) {
+function renderBoard(dates, today) {
   const board = document.getElementById("board");
   board.innerHTML = "";
 
@@ -170,10 +287,10 @@ function renderBoard(dayCount, today) {
   board.appendChild(timeCol);
 
   // עמודה לכל יום
-  for (let d = 0; d < dayCount; d++) {
-    const date = addDays(weekStart, d);
+  for (const date of dates) {
     const col = document.createElement("div");
     col.className = "day-col" + (isSameDay(date, today) ? " today" : "");
+    col.dataset.date = dateKey(date);
 
     for (let i = 0; i < slotCount; i++) {
       const min = startMin + i * settings.slotMinutes;
@@ -206,7 +323,7 @@ function textColorFor(hex) {
 }
 
 // בונה אלמנט של בלוק. גובה דקה אחת = --slot-h / 15 (נקבע ב-CSS).
-// בלוק שחורג מטווח השעות נחתך; בלוק שכולו מחוץ לטווח לא מוצג (סימון ⬆/⬇ יגיע בשלב 5).
+// בלוק שחורג מטווח השעות נחתך; בלוק שכולו מחוץ לטווח לא מוצג על הלוח (יש לו סימון ⬆/⬇ בכותרת היום).
 // place = { lane, lanes }: באיזה "נתיב" מתוך כמה הבלוק יושב (לבלוקים חופפים)
 function createBlockElement(block, rangeStart, rangeEnd, place = { lane: 0, lanes: 1 }) {
   const start = Math.max(toMinutes(block.start), rangeStart);
@@ -214,7 +331,7 @@ function createBlockElement(block, rangeStart, rangeEnd, place = { lane: 0, lane
   if (end <= start) return null;
 
   const el = document.createElement("div");
-  el.className = "block";
+  el.className = "block" + (block.done ? " done" : "");
   el.dataset.id = block.id;
   el.style.top = `calc(var(--slot-h) / 15 * ${start - rangeStart})`;
   el.style.height = `calc(var(--slot-h) / 15 * ${end - start})`;
@@ -239,6 +356,17 @@ function createBlockElement(block, rangeStart, rangeEnd, place = { lane: 0, lane
     note.className = "b-note";
     note.textContent = block.note;
     el.appendChild(note);
+  }
+
+  // וי "בוצע" (ב-CSS: מוצג רק כשיש מקום — תצוגה יומית / טלפון לרוחב / מחשב; בנתיבים צרים לא מוצג)
+  if (place.lanes <= 2) {
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = "done-btn";
+    check.textContent = block.done ? "✓" : "";
+    check.setAttribute("aria-label", block.done ? "בטל סימון בוצע" : "סמן כבוצע");
+    check.setAttribute("aria-pressed", !!block.done);
+    el.appendChild(check);
   }
 
   // ידית בתחתית הבלוק לשינוי אורך
@@ -282,20 +410,63 @@ function layoutOverlaps(dayBlocks) {
 
 // ---------- ניווט ----------
 
-document.getElementById("btn-prev").addEventListener("click", () => {
-  weekStart = addDays(weekStart, -7);
+// dir: -1 = קודם, +1 = הבא. בתצוגה שבועית זז שבוע, ביומית זז יום (ומדלג על ימים מוסתרים).
+function navigate(dir) {
+  if (viewMode === "week") {
+    weekStart = addDays(weekStart, 7 * dir);
+  } else {
+    currentDay = stepDay(currentDay, dir);
+    weekStart = getSunday(currentDay);
+  }
   render();
-});
-document.getElementById("btn-next").addEventListener("click", () => {
-  weekStart = addDays(weekStart, 7);
-  render();
-});
-// "היום": חוזר לשבוע הנוכחי (היום מודגש) וגולל לשעה הנוכחית
+}
+document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
+document.getElementById("btn-next").addEventListener("click", () => navigate(1));
+
+// "היום": חוזר להיום (מודגש) וגולל לשעה הנוכחית
 document.getElementById("btn-today").addEventListener("click", () => {
-  weekStart = getSunday(new Date());
+  const now = new Date();
+  weekStart = getSunday(now);
+  currentDay = clampToVisible(new Date(now.getFullYear(), now.getMonth(), now.getDate()));
   render();
   scrollToNow();
 });
+
+// מעבר בין תצוגה שבועית ליומית
+function setView(mode) {
+  if (mode === viewMode) return;
+  if (mode === "day") {
+    // אם היום נמצא בשבוע המוצג — פותחים אותו. אחרת את היום הראשון של השבוע.
+    const today = new Date();
+    const todayShown = isSameDay(getSunday(today), weekStart) && !isHiddenDay(today);
+    currentDay = todayShown ? new Date(today.getFullYear(), today.getMonth(), today.getDate()) : weekStart;
+  } else {
+    weekStart = getSunday(currentDay);
+  }
+  viewMode = mode;
+  render();
+}
+document.getElementById("view-week").addEventListener("click", () => setView("week"));
+document.getElementById("view-day").addEventListener("click", () => setView("day"));
+
+// החלקה ימינה/שמאלה בטלפון (תצוגה יומית בלבד) מעבירה בין ימים.
+// בעברית היום הבא נמצא משמאל, ולכן החלקה ימינה = היום הבא.
+document.getElementById("board").addEventListener("pointerdown", (e) => {
+  if (viewMode !== "day" || e.pointerType === "mouse") return;
+  swipe = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now() };
+});
+window.addEventListener("pointerup", (e) => {
+  if (!swipe || e.pointerId !== swipe.id) return;
+  const s = swipe;
+  swipe = null;
+  if (drag) return;
+  const dx = e.clientX - s.x, dy = e.clientY - s.y;
+  if (Math.abs(dx) > 70 && Math.abs(dx) > 1.6 * Math.abs(dy) && Date.now() - s.t < 800) {
+    holdClick();
+    navigate(dx > 0 ? 1 : -1);
+  }
+});
+window.addEventListener("pointercancel", () => { swipe = null; });
 
 // גולל את הלוח כך שהשעה הנוכחית תופיע בערך שליש מהחלק העליון של המסך
 function scrollToNow() {
@@ -368,6 +539,8 @@ const markSelectedColor = setupPalette(palette, fColor);
 const btnDuplicate = document.getElementById("btn-duplicate");
 const btnFav = document.getElementById("btn-fav");
 const savedPicker = document.getElementById("saved-picker");
+const fDone = document.getElementById("f-done");
+const doneField = document.getElementById("done-field");
 
 // פותח את החלון. block = בלוק קיים לעריכה, או תאריך+שעה לבלוק חדש.
 function openModal({ block = null, date = null, start = null } = {}) {
@@ -392,11 +565,22 @@ function openModal({ block = null, date = null, start = null } = {}) {
     fDate.appendChild(opt);
   }
 
-  fillTimeSelect(fStart, rangeStart, rangeEnd - 15);
-  fillTimeSelect(fEnd, rangeStart + 15, rangeEnd);
+  // רשימות השעות מכסות את טווח הלוח, ואם הבלוק חורג ממנו (או שהטווח הצטמצם) — גם אותו
+  const lo = block ? Math.min(rangeStart, toMinutes(block.start)) : rangeStart;
+  const hi = block ? Math.max(rangeEnd, toMinutes(block.end)) : rangeEnd;
+  fillTimeSelect(fStart, lo, hi - 15);
+  fillTimeSelect(fEnd, lo + 15, hi);
+  fDone.checked = block ? !!block.done : false;
+  doneField.hidden = !block;
 
   if (block) {
     fTitle.value = block.title;
+    if (![...fDate.options].some((o) => o.value === block.date)) {
+      const opt = document.createElement("option");   // יום שלא ברשימה (למשל מוסתר בהגדרות)
+      opt.value = block.date;
+      opt.textContent = `${DAY_NAMES[parseKey(block.date).getDay()]} ${monthDay.format(parseKey(block.date))}`;
+      fDate.appendChild(opt);
+    }
     fDate.value = block.date;
     fStart.value = block.start;
     fEnd.value = block.end;
@@ -427,7 +611,7 @@ function closeModal() {
 let lastStartMin = 0;
 fStart.addEventListener("focus", () => { lastStartMin = toMinutes(fStart.value); });
 fStart.addEventListener("change", () => {
-  const rangeEnd = toMinutes(settings.dayEnd);
+  const rangeEnd = toMinutes(fEnd.lastElementChild.value);   // סוף הרשימה = השעה המאוחרת ביותר שאפשר לבחור
   const duration = toMinutes(fEnd.value) - lastStartMin;
   const newStart = toMinutes(fStart.value);
   if (duration > 0) fEnd.value = toHHMM(Math.min(newStart + duration, rangeEnd));
@@ -454,7 +638,7 @@ form.addEventListener("submit", (e) => {
   };
 
   if (editingId) {
-    Object.assign(data.blocks.find((b) => b.id === editingId), values);
+    Object.assign(data.blocks.find((b) => b.id === editingId), values, { done: fDone.checked });
   } else {
     data.blocks.push({ id: newId(), ...values, done: false, seriesId: "" });
   }
@@ -527,7 +711,7 @@ boardEl.addEventListener("pointerdown", (e) => {
   if (drag) return;
   if (e.pointerType === "mouse" && e.button !== 0) return;
   const el = e.target.closest(".block");
-  if (!el) return;
+  if (!el || e.target.closest(".done-btn")) return;   // הוי "בוצע" לא מתחיל גרירה
   const block = data.blocks.find((b) => b.id === el.dataset.id);
   if (!block) return;
 
@@ -577,6 +761,7 @@ function activateDrag() {
   if (!drag || drag.active) return;
   clearTimeout(drag.timer);
   drag.active = true;
+  swipe = null;                       // גרירה אינה החלקה בין ימים
   if (drag.mode === "new") {
     // גרירה מ"הבלוקים שלי": נוצר בלוק צף, והמגירה נעלמת כדי שיראו את הלוח
     drag.el = makeGhost(drag.saved);
@@ -615,7 +800,6 @@ function updateDrag() {
       });
   const colRect = col.getBoundingClientRect();
   const pxPerMin = colRect.height / ((rangeEnd - rangeStart) || 1);
-  const dayIndex = cols.indexOf(col);
 
   // שעה (בדקות) לפי מיקום האצבע, מעוגלת למשבצת
   const minuteAt = (y) => rangeStart + Math.round((y - colRect.top) / pxPerMin / grid) * grid;
@@ -637,8 +821,8 @@ function updateDrag() {
   el.style.top = `calc(var(--slot-h) / 15 * ${visibleStart - rangeStart})`;
   el.style.height = `calc(var(--slot-h) / 15 * ${end - visibleStart})`;
 
-  drag.target = { date: dateKey(addDays(weekStart, dayIndex)), start: toHHMM(start), end: toHHMM(end) };
-  showDragTip(`${DAY_NAMES[dayIndex]} <span dir="ltr">${drag.target.start}–${drag.target.end}</span>`);
+  drag.target = { date: col.dataset.date, start: toHHMM(start), end: toHHMM(end) };
+  showDragTip(`${DAY_NAMES[parseKey(col.dataset.date).getDay()]} <span dir="ltr">${drag.target.start}–${drag.target.end}</span>`);
 }
 
 function showDragTip(html) {
@@ -1001,7 +1185,15 @@ boardEl.addEventListener("click", (e) => {
   if (suppressClick) return;
   const blockEl = e.target.closest(".block");
   if (blockEl) {
-    openModal({ block: data.blocks.find((b) => b.id === blockEl.dataset.id) });
+    const block = data.blocks.find((b) => b.id === blockEl.dataset.id);
+    if (!block) return;
+    if (e.target.closest(".done-btn")) {          // וי "בוצע": מסמן/מבטל בלי לפתוח את החלון
+      block.done = !block.done;
+      saveData();
+      render();
+      return;
+    }
+    openModal({ block });
     return;
   }
   const slot = e.target.closest(".slot");
@@ -1014,9 +1206,220 @@ modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); }
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (drag) onDragCancel();          // באמצע גרירה: מבטלים אותה
+  else if (!pickModal.hidden) pickModal.hidden = true;
+  else if (!settingsModal.hidden) closeSettings();
   else if (!savedModal.hidden) closeSavedModal();
   else if (!modal.hidden) closeModal();
   else if (!drawer.hidden) closeDrawer();
+});
+
+// ---------- בחירת בלוק מרשימה (בלוקים מחוץ לטווח השעות) ----------
+
+const pickModal = document.getElementById("pick-modal");
+
+// בלוק אחד — נפתח ישר לעריכה. כמה בלוקים — רשימה לבחירה.
+function pickBlock(list, title) {
+  if (list.length === 1) { openModal({ block: list[0] }); return; }
+  document.getElementById("pick-title").textContent = title;
+  const box = document.getElementById("pick-list");
+  box.innerHTML = "";
+  for (const b of [...list].sort((x, y) => toMinutes(x.start) - toMinutes(y.start))) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pick-item";
+    const dot = document.createElement("span");
+    dot.className = "chip-dot";
+    dot.style.background = b.color;
+    const time = document.createElement("span");
+    time.className = "pick-time";
+    time.textContent = `${b.start}–${b.end}`;
+    btn.append(dot, document.createTextNode(b.title + " "), time);
+    btn.addEventListener("click", () => { pickModal.hidden = true; openModal({ block: b }); });
+    box.appendChild(btn);
+  }
+  pickModal.hidden = false;
+}
+document.getElementById("pick-close").addEventListener("click", () => { pickModal.hidden = true; });
+pickModal.addEventListener("click", (e) => { if (e.target === pickModal) pickModal.hidden = true; });
+
+// לחיצה על "יש N בלוקים בשישי–שבת (מוסתרים)" מציגה אותם
+document.getElementById("hidden-note").addEventListener("click", () => {
+  settings.showWeekend = true;
+  stWeekend.checked = true;
+  saveData();
+  render();
+});
+
+// ---------- הגדרות ----------
+
+const settingsModal = document.getElementById("settings-modal");
+const stStart = document.getElementById("st-start");
+const stEnd = document.getElementById("st-end");
+const stSlot = document.getElementById("st-slot");
+const stWeekend = document.getElementById("st-weekend");
+
+// שעות עגולות בלבד: התחלה 00:00–23:00, סיום 01:00–24:00
+for (let h = 0; h <= 24; h++) {
+  const label = `${pad(h)}:00`;
+  if (h <= 23) stStart.add(new Option(label, label));
+  if (h >= 1) stEnd.add(new Option(label, label));
+}
+
+function openSettings() {
+  stStart.value = settings.dayStart;
+  stEnd.value = settings.dayEnd;
+  stSlot.value = String(settings.slotMinutes);
+  stWeekend.checked = settings.showWeekend;
+  settingsModal.hidden = false;
+}
+function closeSettings() { settingsModal.hidden = true; }
+
+// כל שינוי בהגדרות נשמר ומוחל מיד. הסיום תמיד אחרי ההתחלה (מתקנים אוטומטית את השעה השנייה).
+function applySettings(changed) {
+  let s = toMinutes(stStart.value), e = toMinutes(stEnd.value);
+  if (e <= s) {
+    if (changed === "start") e = s + 60; else s = e - 60;
+    stStart.value = toHHMM(s);
+    stEnd.value = toHHMM(e);
+  }
+  settings.dayStart = stStart.value;
+  settings.dayEnd = stEnd.value;
+  settings.slotMinutes = Number(stSlot.value);
+  settings.showWeekend = stWeekend.checked;
+  if (!settings.showWeekend) {                    // ההסתרה לא משאירה אותנו על יום מוסתר
+    currentDay = clampToVisible(currentDay);
+    weekStart = getSunday(currentDay);
+  }
+  saveData();
+  render();
+}
+stStart.addEventListener("change", () => applySettings("start"));
+stEnd.addEventListener("change", () => applySettings("end"));
+stSlot.addEventListener("change", () => applySettings());
+stWeekend.addEventListener("change", () => applySettings());
+
+document.getElementById("btn-settings").addEventListener("click", openSettings);
+document.getElementById("st-close").addEventListener("click", closeSettings);
+settingsModal.addEventListener("click", (e) => { if (e.target === settingsModal) closeSettings(); });
+
+// ---------- גיבוי: ייצוא וייבוא ----------
+
+// מוריד קובץ JSON עם כל הנתונים
+function exportData() {
+  const payload = { app: "weeklyPlanner", exportedAt: new Date().toISOString(), ...data };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `weekly-planner-${dateKey(new Date())}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  showToast("הגיבוי נשמר כקובץ (בדרך כלל בתיקיית ההורדות)");
+}
+
+const TIME_RE = /^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+// בודק קובץ ייבוא ומחזיר נתונים נקיים. פריטים לא תקינים מדלגים (ומחשבים כמה). אם הקובץ לא מתאים בכלל — null.
+function sanitizeImport(raw) {
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.blocks)) return null;
+  let skipped = 0;
+  const seen = new Set();
+  const uniqueId = (id) => {
+    let v = typeof id === "string" && id ? id : newId();
+    while (seen.has(v)) v = newId();
+    seen.add(v);
+    return v;
+  };
+
+  const blocks = [];
+  for (const b of raw.blocks) {
+    const ok = b && typeof b.title === "string" && DATE_RE.test(b.date) && TIME_RE.test(b.start) &&
+               TIME_RE.test(b.end) && toMinutes(b.end) > toMinutes(b.start);
+    if (!ok) { skipped++; continue; }
+    blocks.push({
+      id: uniqueId(b.id), title: b.title, date: b.date, start: b.start, end: b.end,
+      color: COLOR_RE.test(b.color) ? b.color : DEFAULT_COLOR,
+      note: typeof b.note === "string" ? b.note : "",
+      done: !!b.done, seriesId: typeof b.seriesId === "string" ? b.seriesId : "",
+    });
+  }
+
+  const savedBlocks = [];
+  for (const s of Array.isArray(raw.savedBlocks) ? raw.savedBlocks : []) {
+    if (!(s && typeof s.title === "string" && Number.isFinite(s.durationMinutes) && s.durationMinutes > 0)) { skipped++; continue; }
+    savedBlocks.push({
+      id: uniqueId(s.id), title: s.title,
+      color: COLOR_RE.test(s.color) ? s.color : DEFAULT_COLOR,
+      durationMinutes: Math.round(s.durationMinutes),
+      note: typeof s.note === "string" ? s.note : "",
+    });
+  }
+
+  const series = (Array.isArray(raw.series) ? raw.series : [])
+    .filter((x) => x && typeof x.id === "string" && DATE_RE.test(x.untilDate))
+    .map((x) => ({ id: x.id, untilDate: x.untilDate }));
+
+  const st = raw.settings && typeof raw.settings === "object" ? raw.settings : {};
+  const hour = (v, fallback) => (typeof v === "string" && /^(?:[01]\d|2[0-3]|24):00$/.test(v) ? v : fallback);
+  let dayStart = hour(st.dayStart, DEFAULT_SETTINGS.dayStart);
+  let dayEnd = hour(st.dayEnd, DEFAULT_SETTINGS.dayEnd);
+  if (toMinutes(dayEnd) <= toMinutes(dayStart)) { dayStart = DEFAULT_SETTINGS.dayStart; dayEnd = DEFAULT_SETTINGS.dayEnd; }
+  const settingsClean = {
+    dayStart, dayEnd,
+    slotMinutes: [15, 30, 60].includes(st.slotMinutes) ? st.slotMinutes : DEFAULT_SETTINGS.slotMinutes,
+    showWeekend: typeof st.showWeekend === "boolean" ? st.showWeekend : DEFAULT_SETTINGS.showWeekend,
+  };
+
+  return { blocks, savedBlocks, series, settings: settingsClean, skipped };
+}
+
+// מחליף את כל הנתונים בנתונים שהתקבלו (מעדכן את אותם אובייקטים, כדי שכל הקוד ימשיך לראות אותם)
+function replaceAllData(next) {
+  data.blocks = next.blocks;
+  data.savedBlocks = next.savedBlocks;
+  data.series = next.series;
+  Object.assign(settings, next.settings);
+  currentDay = clampToVisible(currentDay);
+  weekStart = getSunday(viewMode === "day" ? currentDay : weekStart);
+  saveData();
+  render();
+  if (!settingsModal.hidden) openSettings();   // מרענן את שדות ההגדרות
+}
+
+document.getElementById("btn-export").addEventListener("click", exportData);
+
+const importFile = document.getElementById("import-file");
+document.getElementById("btn-import").addEventListener("click", () => importFile.click());
+importFile.addEventListener("change", async () => {
+  const file = importFile.files[0];
+  importFile.value = "";                 // מאפשר לבחור שוב את אותו קובץ
+  if (!file) return;
+
+  let parsed;
+  try { parsed = JSON.parse(await file.text()); } catch (err) { parsed = null; }
+  const next = sanitizeImport(parsed);
+  if (!next) {
+    showToast("הקובץ לא תקין — לא בוצעו שינויים");
+    return;
+  }
+
+  const msg = `לייבא ${next.blocks.length} בלוקים ו-${next.savedBlocks.length} בלוקים שמורים?\n` +
+              `כל הנתונים הנוכחיים יוחלפו.` +
+              (next.skipped ? `\n(${next.skipped} פריטים לא תקינים ידולגו)` : "");
+  if (!confirm(msg)) return;
+
+  // שומרים עותק של הנתונים הנוכחיים — גם ב"בטל" וגם בדפדפן, כדי שלא יאבדו
+  const before = {
+    blocks: data.blocks, savedBlocks: data.savedBlocks, series: data.series, settings: { ...settings },
+  };
+  try { localStorage.setItem(`${STORAGE_KEY}.beforeImport`, JSON.stringify(before)); } catch (err) { /* ignore */ }
+
+  replaceAllData(next);
+  showToast(next.skipped ? `הנתונים יובאו (${next.skipped} פריטים דולגו)` : "הנתונים יובאו", () => replaceAllData(before));
 });
 
 render();
