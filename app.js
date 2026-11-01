@@ -343,25 +343,31 @@ function fillTimeSelect(select, fromMin, toMin) {
   }
 }
 
-// מסמן את עיגול הצבע הנבחר בפלטה
-function markSelectedColor() {
-  for (const sw of palette.children) {
-    sw.classList.toggle("selected", sw.dataset.color === fColor.value.toLowerCase());
+// בונה פלטת צבעים בתוך container, מחוברת לשדה צבע (input). מחזיר פונקציה שמסמנת את הצבע הנבחר.
+function setupPalette(container, input) {
+  const mark = () => {
+    for (const sw of container.children) {
+      sw.classList.toggle("selected", sw.dataset.color === input.value.toLowerCase());
+    }
+  };
+  for (const color of PALETTE) {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "swatch";
+    sw.dataset.color = color;
+    sw.style.background = color;
+    sw.setAttribute("aria-label", `צבע ${color}`);
+    sw.addEventListener("click", () => { input.value = color; mark(); });
+    container.appendChild(sw);
   }
+  input.addEventListener("input", mark);
+  return mark;
 }
+const markSelectedColor = setupPalette(palette, fColor);
 
-// בונים את הפלטה פעם אחת
-for (const color of PALETTE) {
-  const sw = document.createElement("button");
-  sw.type = "button";
-  sw.className = "swatch";
-  sw.dataset.color = color;
-  sw.style.background = color;
-  sw.setAttribute("aria-label", `צבע ${color}`);
-  sw.addEventListener("click", () => { fColor.value = color; markSelectedColor(); });
-  palette.appendChild(sw);
-}
-fColor.addEventListener("input", markSelectedColor);
+const btnDuplicate = document.getElementById("btn-duplicate");
+const btnFav = document.getElementById("btn-fav");
+const savedPicker = document.getElementById("saved-picker");
 
 // פותח את החלון. block = בלוק קיים לעריכה, או תאריך+שעה לבלוק חדש.
 function openModal({ block = null, date = null, start = null } = {}) {
@@ -371,6 +377,8 @@ function openModal({ block = null, date = null, start = null } = {}) {
 
   document.getElementById("modal-title").textContent = block ? "עריכת בלוק" : "בלוק חדש";
   btnDelete.hidden = !block;
+  btnDuplicate.hidden = !block;
+  btnFav.hidden = !block;
   fError.textContent = "";
 
   // ימי השבוע המוצג
@@ -404,6 +412,7 @@ function openModal({ block = null, date = null, start = null } = {}) {
     fNote.value = "";
   }
   markSelectedColor();
+  renderSavedPicker();
 
   modal.hidden = false;
   if (!block) fTitle.focus();
@@ -464,7 +473,8 @@ let undoAction = null;
 
 function showToast(text, onUndo) {
   toastText.textContent = text;
-  undoAction = onUndo;
+  undoAction = onUndo || null;
+  toastUndo.hidden = !onUndo;   // הודעה בלי "בטל" (למשל "כבר קיים")
   toast.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, 6000);
@@ -550,7 +560,7 @@ function onDragMove(e) {
 
   if (!drag.active) {
     const dist = Math.hypot(drag.x - drag.startX, drag.y - drag.startY);
-    if (drag.touch && drag.mode === "move") {
+    if (drag.touch && drag.mode !== "resize") {
       // האצבע זזה לפני הלחיצה הארוכה = המשתמשת גוללת. מבטלים ומשאירים לדפדפן לגלול.
       if (dist > LONG_PRESS_SLOP) endDrag();
     } else if (dist > DRAG_THRESHOLD) {
@@ -567,6 +577,11 @@ function activateDrag() {
   if (!drag || drag.active) return;
   clearTimeout(drag.timer);
   drag.active = true;
+  if (drag.mode === "new") {
+    // גרירה מ"הבלוקים שלי": נוצר בלוק צף, והמגירה נעלמת כדי שיראו את הלוח
+    drag.el = makeGhost(drag.saved);
+    drawer.classList.add("drag-away");
+  }
   drag.el.classList.add("dragging");
   document.body.classList.add("is-dragging");
   window.getSelection()?.removeAllRanges();
@@ -583,6 +598,14 @@ function updateDrag() {
   const cols = [...boardEl.querySelectorAll(".day-col")];
   const el = drag.el;
 
+  // בלוק שנגרר מהמגירה: אם האצבע מחוץ ללוח, אין יעד (שחרור כאן מבטל)
+  if (drag.mode === "new" && !pointerOverBoard()) {
+    el.remove();
+    drag.target = null;
+    dragTip.hidden = true;
+    return;
+  }
+
   // העמודה (היום) הקרובה ביותר לאצבע
   const col = drag.mode === "resize"
     ? el.parentElement
@@ -597,9 +620,9 @@ function updateDrag() {
   // שעה (בדקות) לפי מיקום האצבע, מעוגלת למשבצת
   const minuteAt = (y) => rangeStart + Math.round((y - colRect.top) / pxPerMin / grid) * grid;
 
-  let start = toMinutes(drag.block.start);
-  let end = toMinutes(drag.block.end);
-  if (drag.mode === "move") {
+  let start = drag.block ? toMinutes(drag.block.start) : 0;
+  let end = drag.block ? toMinutes(drag.block.end) : 0;
+  if (drag.mode !== "resize") {
     start = minuteAt(drag.y - drag.grabOffsetY);
     start = Math.min(Math.max(start, rangeStart), Math.max(rangeStart, rangeEnd - drag.duration));
     end = Math.min(start + drag.duration, rangeEnd);
@@ -645,6 +668,7 @@ function autoScrollTick() {
 // שחרור: שומרים את המיקום החדש
 function onDragEnd(e) {
   if (!drag || e.pointerId !== drag.pointerId) return;
+  if (drag.mode === "new") { finishNewDrag(); return; }
   if (drag.active && drag.target) {
     const { block, target } = drag;
     if (target.date !== block.date || target.start !== block.start || target.end !== block.end) {
@@ -672,7 +696,11 @@ function endDrag() {
   if (!drag) return;
   clearTimeout(drag.timer);
   cancelAnimationFrame(drag.raf);
-  drag.el.classList.remove("dragging");
+  if (drag.el) {
+    drag.el.classList.remove("dragging");
+    if (drag.mode === "new") drag.el.remove();   // הבלוק הצף נעלם (אם נשמר — render() יצייר אותו מחדש)
+  }
+  drawer.classList.remove("drag-away");
   document.body.classList.remove("is-dragging");
   dragTip.hidden = true;
   window.removeEventListener("pointermove", onDragMove);
@@ -696,6 +724,277 @@ document.addEventListener("touchmove", (e) => {
 boardEl.addEventListener("contextmenu", (e) => { if (e.target.closest(".block")) e.preventDefault(); });
 boardEl.addEventListener("selectstart", (e) => { if (e.target.closest && e.target.closest(".block")) e.preventDefault(); });
 
+// ---------- שכפול ושמירה כבלוק קבוע ----------
+
+// שכפול: עותק באותו מקום (מוצג ליד המקור), אפשר לגרור אותו משם. "בוצע" לא מועתק.
+btnDuplicate.addEventListener("click", () => {
+  const original = data.blocks.find((b) => b.id === editingId);
+  if (!original) return;
+  const copy = { ...original, id: newId(), done: false, seriesId: "" };
+  data.blocks.push(copy);
+  saveData();
+  closeModal();
+  render();
+  flashBlock(copy.id);
+  showToast("הבלוק שוכפל", () => {
+    data.blocks = data.blocks.filter((b) => b.id !== copy.id);
+    saveData();
+    render();
+  });
+});
+
+// מסמן לרגע בלוק חדש כדי שיהיה ברור איזה מהם העותק
+function flashBlock(id) {
+  const el = boardEl.querySelector(`.block[data-id="${id}"]`);
+  if (el) el.classList.add("flash");
+}
+
+// שמירה כבלוק קבוע: כותרת, צבע, משך והערה (בלי יום ושעה). לוקח את מה שמוצג כרגע בחלון.
+btnFav.addEventListener("click", () => {
+  const title = fTitle.value.trim();
+  const duration = toMinutes(fEnd.value) - toMinutes(fStart.value);
+  if (!title) { fError.textContent = "צריך לכתוב כותרת"; fTitle.focus(); return; }
+  if (duration <= 0) { fError.textContent = "שעת הסיום חייבת להיות אחרי שעת ההתחלה"; return; }
+  fError.textContent = "";
+
+  const item = { title, color: fColor.value, durationMinutes: duration, note: fNote.value.trim() };
+  const exists = data.savedBlocks.some((s) =>
+    s.title === item.title && s.color.toLowerCase() === item.color.toLowerCase() &&
+    s.durationMinutes === item.durationMinutes && (s.note || "") === item.note);
+  if (exists) { showToast("כבר קיים ב״הבלוקים שלי״"); return; }
+
+  const saved = { id: newId(), ...item };
+  data.savedBlocks.push(saved);
+  saveData();
+  showToast("נשמר ב״הבלוקים שלי״", () => {
+    data.savedBlocks = data.savedBlocks.filter((s) => s.id !== saved.id);
+    saveData();
+  });
+});
+
+// שורת בלוקים שמורים בראש חלון "בלוק חדש": לחיצה ממלאת את השדות
+function renderSavedPicker() {
+  savedPicker.innerHTML = "";
+  savedPicker.hidden = editingId !== null || data.savedBlocks.length === 0;
+  if (savedPicker.hidden) return;
+
+  const label = document.createElement("div");
+  label.className = "picker-label";
+  label.textContent = "בלוקים שמורים:";
+  savedPicker.appendChild(label);
+
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  for (const s of data.savedBlocks) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    const dot = document.createElement("span");
+    dot.className = "chip-dot";
+    dot.style.background = s.color;
+    chip.append(dot, document.createTextNode(s.title));
+    chip.addEventListener("click", () => applySavedToForm(s));
+    chips.appendChild(chip);
+  }
+  savedPicker.appendChild(chips);
+}
+
+function applySavedToForm(s) {
+  fTitle.value = s.title;
+  fColor.value = s.color;
+  fNote.value = s.note || "";
+  fEnd.value = toHHMM(Math.min(toMinutes(fStart.value) + s.durationMinutes, toMinutes(settings.dayEnd)));
+  markSelectedColor();
+}
+
+// ---------- "הבלוקים שלי": מגירה ----------
+
+const drawer = document.getElementById("drawer");
+const savedList = document.getElementById("saved-list");
+const savedEmpty = document.getElementById("saved-empty");
+
+function openDrawer() { renderSavedList(); drawer.hidden = false; }
+function closeDrawer() { drawer.hidden = true; }
+
+document.getElementById("btn-saved").addEventListener("click", openDrawer);
+document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+drawer.addEventListener("click", (e) => { if (e.target === drawer) closeDrawer(); }); // לחיצה על הרקע
+
+// "45 דקות", "שעה", "שעתיים", "3 שעות", "1:30 שעות"
+function durationLabel(min) {
+  if (min < 60) return `${min} דקות`;
+  const h = Math.floor(min / 60), m = min % 60;
+  if (m) return `${h}:${pad(m)} שעות`;
+  return h === 1 ? "שעה" : h === 2 ? "שעתיים" : `${h} שעות`;
+}
+
+function renderSavedList() {
+  savedList.innerHTML = "";
+  savedEmpty.hidden = data.savedBlocks.length > 0;
+
+  for (const s of data.savedBlocks) {
+    const card = document.createElement("div");
+    card.className = "saved-card";
+    card.dataset.id = s.id;
+
+    const dot = document.createElement("span");
+    dot.className = "saved-dot";
+    dot.style.background = s.color;
+
+    const info = document.createElement("div");
+    info.className = "saved-info";
+    const name = document.createElement("div");
+    name.className = "saved-name";
+    name.textContent = s.title;
+    const meta = document.createElement("div");
+    meta.className = "saved-meta";
+    meta.textContent = durationLabel(s.durationMinutes) + (s.note ? ` · ${s.note}` : "");
+    info.append(name, meta);
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "icon-btn";
+    edit.textContent = "✎";
+    edit.setAttribute("aria-label", `עריכת ${s.title}`);
+    edit.addEventListener("click", () => openSavedModal(s));
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "icon-btn";
+    del.textContent = "✕";
+    del.setAttribute("aria-label", `מחיקת ${s.title}`);
+    del.addEventListener("click", () => deleteSaved(s));
+
+    card.append(dot, info, edit, del);
+    savedList.appendChild(card);
+  }
+}
+
+function deleteSaved(s) {
+  const index = data.savedBlocks.findIndex((x) => x.id === s.id);
+  if (index < 0) return;
+  data.savedBlocks.splice(index, 1);
+  saveData();
+  renderSavedList();
+  showToast("הבלוק השמור נמחק", () => {
+    data.savedBlocks.splice(index, 0, s);   // חוזר לאותו מקום ברשימה
+    saveData();
+    renderSavedList();
+  });
+}
+
+// ---------- עריכת בלוק שמור ----------
+
+const savedModal = document.getElementById("saved-modal");
+const sTitle = document.getElementById("s-title");
+const sDuration = document.getElementById("s-duration");
+const sColor = document.getElementById("s-color");
+const sNote = document.getElementById("s-note");
+const sError = document.getElementById("s-error");
+const markSavedColor = setupPalette(document.getElementById("s-palette"), sColor);
+let editingSavedId = null;
+
+for (let m = 15; m <= 600; m += 15) {
+  const opt = document.createElement("option");
+  opt.value = m;
+  opt.textContent = durationLabel(m);
+  sDuration.appendChild(opt);
+}
+
+function openSavedModal(s) {
+  editingSavedId = s.id;
+  sTitle.value = s.title;
+  sDuration.value = s.durationMinutes;
+  sColor.value = s.color;
+  sNote.value = s.note || "";
+  sError.textContent = "";
+  markSavedColor();
+  savedModal.hidden = false;
+}
+
+function closeSavedModal() { savedModal.hidden = true; editingSavedId = null; }
+
+document.getElementById("saved-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const title = sTitle.value.trim();
+  if (!title) { sError.textContent = "צריך לכתוב כותרת"; sTitle.focus(); return; }
+  Object.assign(data.savedBlocks.find((x) => x.id === editingSavedId), {
+    title, durationMinutes: Number(sDuration.value), color: sColor.value, note: sNote.value.trim(),
+  });
+  saveData();
+  closeSavedModal();
+  renderSavedList();
+});
+document.getElementById("s-cancel").addEventListener("click", closeSavedModal);
+savedModal.addEventListener("click", (e) => { if (e.target === savedModal) closeSavedModal(); });
+
+// ---------- גרירה מהמגירה אל הלוח ----------
+// עכבר: גוררים מיד. מגע: לחיצה ארוכה ואז גרירה (כמו בגרירת בלוקים), כדי שגלילת הרשימה תמשיך לעבוד.
+
+savedList.addEventListener("pointerdown", (e) => {
+  if (drag) return;
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (e.target.closest("button")) return;                 // כפתורי עריכה/מחיקה
+  const card = e.target.closest(".saved-card");
+  const saved = card && data.savedBlocks.find((s) => s.id === card.dataset.id);
+  if (!saved) return;
+
+  drag = {
+    mode: "new", saved, el: null,
+    pointerId: e.pointerId,
+    touch: e.pointerType !== "mouse",
+    startX: e.clientX, startY: e.clientY,
+    x: e.clientX, y: e.clientY,
+    grabOffsetY: 8,                                        // הבלוק נוחת מעט מתחת לראש האצבע
+    duration: saved.durationMinutes,
+    active: false, target: null, timer: null, raf: 0,
+  };
+  if (drag.touch) drag.timer = setTimeout(activateDrag, LONG_PRESS_MS);
+
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragEnd);
+  window.addEventListener("pointercancel", onDragCancel);
+});
+
+savedList.addEventListener("contextmenu", (e) => { if (e.target.closest(".saved-card")) e.preventDefault(); });
+
+// בלוק צף שמוצג בזמן הגרירה (אותו מראה של בלוק רגיל)
+function makeGhost(saved) {
+  const el = document.createElement("div");
+  el.className = "block";
+  el.style.background = saved.color;
+  el.style.color = textColorFor(saved.color);
+  const title = document.createElement("span");
+  title.className = "b-title";
+  title.textContent = saved.title;
+  el.appendChild(title);
+  return el;
+}
+
+// האם האצבע/העכבר נמצאים מעל אזור הלוח (ולא מתחת לכותרת הקבועה)
+function pointerOverBoard() {
+  const b = boardEl.getBoundingClientRect();
+  const top = Math.max(b.top, document.querySelector(".top").getBoundingClientRect().bottom);
+  return drag.x >= b.left && drag.x <= b.right && drag.y >= top && drag.y <= Math.min(b.bottom, window.innerHeight);
+}
+
+// שחרור של בלוק שנגרר מהמגירה: נוצר בלוק חדש בלוח, או שהגרירה מתבטלת והמגירה חוזרת
+function finishNewDrag() {
+  const { saved, target, active } = drag;
+  endDrag();
+  if (!active) return;                  // לחיצה רגילה בלי גרירה — לא עושים כלום
+  holdClick();
+  if (!target) return;                  // שוחרר מחוץ ללוח: המגירה חוזרת
+
+  data.blocks.push({
+    id: newId(), title: saved.title, date: target.date, start: target.start, end: target.end,
+    color: saved.color, note: saved.note || "", done: false, seriesId: "",
+  });
+  saveData();
+  closeDrawer();
+  render();
+}
+
 // ---------- לחיצות על הלוח ----------
 
 boardEl.addEventListener("click", (e) => {
@@ -715,7 +1014,9 @@ modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); }
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (drag) onDragCancel();          // באמצע גרירה: מבטלים אותה
+  else if (!savedModal.hidden) closeSavedModal();
   else if (!modal.hidden) closeModal();
+  else if (!drawer.hidden) closeDrawer();
 });
 
 render();

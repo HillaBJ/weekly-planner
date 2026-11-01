@@ -10,12 +10,13 @@
   <!-- חלק עליון קבוע: ניווט בין שבועות + כותרות הימים -->
   <header class="top">
     <div class="toolbar">
-      <button id="btn-prev" class="btn" aria-label="שבוע קודם">‹ קודם</button>
+      <button id="btn-prev" class="btn" aria-label="שבוע קודם">‹<span class="lbl"> קודם</span></button>
       <div class="week-title">
         <button id="btn-today" class="btn btn-today">היום</button>
         <span id="week-range"></span>
       </div>
-      <button id="btn-next" class="btn" aria-label="שבוע הבא">הבא ›</button>
+      <button id="btn-saved" class="btn btn-icon" aria-label="הבלוקים שלי" title="הבלוקים שלי">★</button>
+      <button id="btn-next" class="btn" aria-label="שבוע הבא"><span class="lbl">הבא </span>›</button>
     </div>
     <div id="day-headers" class="grid-row day-headers"></div>
   </header>
@@ -27,6 +28,9 @@
   <div id="modal" class="modal" hidden>
     <form id="block-form" class="sheet" novalidate>
       <h2 id="modal-title">בלוק חדש</h2>
+
+      <!-- בלוקים שמורים לבחירה מהירה (רק בבלוק חדש) -->
+      <div id="saved-picker" class="saved-picker" hidden></div>
 
       <label class="field">כותרת
         <input id="f-title" type="text" maxlength="80" autocomplete="off">
@@ -54,10 +58,56 @@
 
       <p id="f-error" class="error" role="alert"></p>
 
+      <!-- רק בעריכת בלוק קיים -->
+      <div class="actions actions-secondary">
+        <button type="button" id="btn-duplicate" class="btn btn-small" hidden>שכפל</button>
+        <button type="button" id="btn-fav" class="btn btn-small" hidden>★ שמור כבלוק קבוע</button>
+      </div>
+
       <div class="actions">
         <button type="submit" class="btn btn-primary">שמור</button>
         <button type="button" id="btn-cancel" class="btn">ביטול</button>
         <button type="button" id="btn-delete" class="btn btn-danger" hidden>מחק</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- "הבלוקים שלי": מגירה עם הבלוקים השמורים -->
+  <aside id="drawer" class="drawer" hidden aria-label="הבלוקים שלי">
+    <div class="drawer-panel">
+      <div class="drawer-head">
+        <h2>הבלוקים שלי</h2>
+        <button id="drawer-close" type="button" class="btn btn-small">סגור</button>
+      </div>
+      <p class="hint">גוררים בלוק אל הלוח (בטלפון: לחיצה ארוכה ואז גרירה).</p>
+      <p id="saved-empty" class="hint empty">עוד אין בלוקים שמורים. פתחי בלוק קיים ולחצי "שמור כבלוק קבוע".</p>
+      <div id="saved-list" class="saved-list"></div>
+    </div>
+  </aside>
+
+  <!-- עריכת בלוק שמור -->
+  <div id="saved-modal" class="modal" hidden>
+    <form id="saved-form" class="sheet" novalidate>
+      <h2>עריכת בלוק שמור</h2>
+      <label class="field">כותרת
+        <input id="s-title" type="text" maxlength="80" autocomplete="off">
+      </label>
+      <label class="field">משך
+        <select id="s-duration"></select>
+      </label>
+      <div class="field">צבע
+        <div class="color-row">
+          <div id="s-palette" class="palette"></div>
+          <label class="free-color">חופשי <input id="s-color" type="color" value="#5b8def"></label>
+        </div>
+      </div>
+      <label class="field">הערה (לא חובה)
+        <textarea id="s-note" rows="3" maxlength="500"></textarea>
+      </label>
+      <p id="s-error" class="error" role="alert"></p>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">שמור</button>
+        <button type="button" id="s-cancel" class="btn">ביטול</button>
       </div>
     </form>
   </div>
