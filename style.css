@@ -144,10 +144,14 @@ body {
 
 /* ===== בלוקים ===== */
 .block {
-  position: absolute;
-  inset-inline: 1px;
+  position: absolute;          /* מיקום, רוחב ונתיב נקבעים ב-app.js (בלוקים חופפים זה לצד זה) */
   z-index: 1;
   overflow: hidden;
+  /* לחיצה ארוכה = גרירה, לא בחירת טקסט / תפריט של הדפדפן */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
   padding: 1px 3px;
   border-radius: 6px;
   font-size: 0.7rem;
@@ -268,3 +272,55 @@ body {
   font-weight: 700;
   cursor: pointer;
 }
+
+/* ===== גרירה ושינוי אורך ===== */
+/* ידית בתחתית הבלוק: אזור לחיצה באמצע התחתית, כך שהצדדים נשארים לגרירה רגילה */
+.resize-handle {
+  position: absolute;
+  bottom: 0;
+  inset-inline-start: 50%;
+  width: max(50%, 18px);
+  max-width: 100%;
+  height: 10px;
+  transform: translateX(50%);           /* מרכוז (RTL: start = ימין) */
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;                   /* נגיעה בידית לא מתחילה גלילה */
+}
+.resize-handle i {
+  display: block;
+  width: 60%;
+  max-width: 22px;
+  height: 3px;
+  margin-bottom: 1px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.block.dragging {
+  z-index: 20;
+  opacity: 0.9;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+  cursor: grabbing;
+}
+.is-dragging, .is-dragging * {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: grabbing;
+}
+
+.drag-tip {
+  position: fixed;
+  z-index: 70;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #2b2f36;
+  color: #fff;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.drag-tip[hidden] { display: none; }

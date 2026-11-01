@@ -185,12 +185,12 @@ function renderBoard(dayCount, today) {
       col.appendChild(slot);
     }
 
-    // הבלוקים של היום הזה
-    for (const block of data.blocks) {
-      if (block.date === dateKey(date)) {
-        const el = createBlockElement(block, startMin, endMin);
-        if (el) col.appendChild(el);
-      }
+    // הבלוקים של היום הזה (חופפים מוצגים זה לצד זה)
+    const dayBlocks = data.blocks.filter((b) => b.date === dateKey(date));
+    const layout = layoutOverlaps(dayBlocks);
+    for (const block of dayBlocks) {
+      const el = createBlockElement(block, startMin, endMin, layout.get(block.id));
+      if (el) col.appendChild(el);
     }
     board.appendChild(col);
   }
@@ -207,7 +207,8 @@ function textColorFor(hex) {
 
 // בונה אלמנט של בלוק. גובה דקה אחת = --slot-h / 15 (נקבע ב-CSS).
 // בלוק שחורג מטווח השעות נחתך; בלוק שכולו מחוץ לטווח לא מוצג (סימון ⬆/⬇ יגיע בשלב 5).
-function createBlockElement(block, rangeStart, rangeEnd) {
+// place = { lane, lanes }: באיזה "נתיב" מתוך כמה הבלוק יושב (לבלוקים חופפים)
+function createBlockElement(block, rangeStart, rangeEnd, place = { lane: 0, lanes: 1 }) {
   const start = Math.max(toMinutes(block.start), rangeStart);
   const end = Math.min(toMinutes(block.end), rangeEnd);
   if (end <= start) return null;
@@ -217,6 +218,8 @@ function createBlockElement(block, rangeStart, rangeEnd) {
   el.dataset.id = block.id;
   el.style.top = `calc(var(--slot-h) / 15 * ${start - rangeStart})`;
   el.style.height = `calc(var(--slot-h) / 15 * ${end - start})`;
+  el.style.insetInlineStart = `calc(${place.lane} * 100% / ${place.lanes} + 1px)`;
+  el.style.width = `calc(100% / ${place.lanes} - 2px)`;
   el.style.background = block.color;
   el.style.color = textColorFor(block.color);
 
@@ -237,7 +240,44 @@ function createBlockElement(block, rangeStart, rangeEnd) {
     note.textContent = block.note;
     el.appendChild(note);
   }
+
+  // ידית בתחתית הבלוק לשינוי אורך
+  const handle = document.createElement("div");
+  handle.className = "resize-handle";
+  handle.innerHTML = "<i></i>";
+  el.appendChild(handle);
   return el;
+}
+
+// בלוקים שחופפים בזמן מתחלקים ל"נתיבים" זה לצד זה.
+// מחזיר Map: id -> { lane, lanes } (lanes = כמה נתיבים יש בקבוצה החופפת)
+function layoutOverlaps(dayBlocks) {
+  const items = dayBlocks
+    .map((b) => ({ b, s: toMinutes(b.start), e: toMinutes(b.end) }))
+    .sort((x, y) => x.s - y.s || y.e - x.e);
+
+  const layout = new Map();
+  let cluster = [];      // קבוצה של בלוקים שחופפים זה לזה (ישירות או בשרשרת)
+  let clusterEnd = -1;
+
+  const flush = () => {
+    const laneEnds = []; // מתי כל נתיב מתפנה
+    for (const it of cluster) {
+      let lane = laneEnds.findIndex((end) => end <= it.s);
+      if (lane < 0) { lane = laneEnds.length; laneEnds.push(it.e); } else { laneEnds[lane] = it.e; }
+      it.lane = lane;
+    }
+    for (const it of cluster) layout.set(it.b.id, { lane: it.lane, lanes: laneEnds.length });
+    cluster = [];
+  };
+
+  for (const it of items) {
+    if (cluster.length && it.s >= clusterEnd) flush();
+    clusterEnd = cluster.length ? Math.max(clusterEnd, it.e) : it.e;
+    cluster.push(it);
+  }
+  if (cluster.length) flush();
+  return layout;
 }
 
 // ---------- ניווט ----------
@@ -454,9 +494,212 @@ btnDelete.addEventListener("click", () => {
   });
 });
 
+// ---------- גרירה ושינוי אורך ----------
+// עכבר: גוררים מיד (אחרי תזוזה קטנה). מגע: לחיצה ארוכה מתחילה גרירה,
+// כדי שהחלקת אצבע רגילה תמשיך לגלול את הלוח. ידית שינוי האורך עובדת מיד גם במגע.
+
+const DRAG_THRESHOLD = 5;      // פיקסלים: עד כמה אפשר לזוז בעכבר לפני שזו "גרירה"
+const LONG_PRESS_MS = 450;     // כמה זמן להחזיק אצבע כדי להתחיל גרירה
+const LONG_PRESS_SLOP = 10;    // תזוזת אצבע גדולה מזה = גלילה, לא גרירה
+const EDGE_ZONE = 70;          // אזור בקצה המסך שבו גרירה מפעילה גלילה אוטומטית
+
+const boardEl = document.getElementById("board");
+let drag = null;               // מצב הגרירה הנוכחית (null = אין)
+let suppressClick = false;     // אחרי גרירה לא פותחים את חלון העריכה
+
+// תיבה צפה שמראה את היום והשעות החדשים בזמן גרירה (חשוב כשהבלוק צר בטלפון)
+const dragTip = document.createElement("div");
+dragTip.className = "drag-tip";
+dragTip.hidden = true;
+document.body.appendChild(dragTip);
+
+boardEl.addEventListener("pointerdown", (e) => {
+  if (drag) return;
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  const el = e.target.closest(".block");
+  if (!el) return;
+  const block = data.blocks.find((b) => b.id === el.dataset.id);
+  if (!block) return;
+
+  const mode = e.target.closest(".resize-handle") ? "resize" : "move";
+  const rect = el.getBoundingClientRect();
+  drag = {
+    el, block, mode,
+    pointerId: e.pointerId,
+    touch: e.pointerType !== "mouse",
+    startX: e.clientX, startY: e.clientY,
+    x: e.clientX, y: e.clientY,
+    // איפה תפסנו את הבלוק, כדי שלא יקפוץ מתחת לאצבע
+    grabOffsetY: e.clientY - (mode === "resize" ? rect.bottom : rect.top),
+    duration: toMinutes(block.end) - toMinutes(block.start),
+    active: false, target: null, timer: null, raf: 0,
+  };
+
+  // מגע + גרירת בלוק: מחכים ללחיצה ארוכה
+  if (drag.touch && mode === "move") drag.timer = setTimeout(activateDrag, LONG_PRESS_MS);
+
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragEnd);
+  window.addEventListener("pointercancel", onDragCancel);
+});
+
+function onDragMove(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  drag.x = e.clientX;
+  drag.y = e.clientY;
+
+  if (!drag.active) {
+    const dist = Math.hypot(drag.x - drag.startX, drag.y - drag.startY);
+    if (drag.touch && drag.mode === "move") {
+      // האצבע זזה לפני הלחיצה הארוכה = המשתמשת גוללת. מבטלים ומשאירים לדפדפן לגלול.
+      if (dist > LONG_PRESS_SLOP) endDrag();
+    } else if (dist > DRAG_THRESHOLD) {
+      activateDrag();
+    }
+    return;
+  }
+  e.preventDefault();
+  updateDrag();
+}
+
+// מתחיל גרירה בפועל
+function activateDrag() {
+  if (!drag || drag.active) return;
+  clearTimeout(drag.timer);
+  drag.active = true;
+  drag.el.classList.add("dragging");
+  document.body.classList.add("is-dragging");
+  window.getSelection()?.removeAllRanges();
+  if (drag.touch && navigator.vibrate) navigator.vibrate(30); // רטט קצר = "תפסתי"
+  updateDrag();
+  drag.raf = requestAnimationFrame(autoScrollTick);
+}
+
+// מחשב את המיקום החדש (נצמד למשבצות) ומזיז את הבלוק על המסך
+function updateDrag() {
+  const rangeStart = toMinutes(settings.dayStart);
+  const rangeEnd = toMinutes(settings.dayEnd);
+  const grid = settings.slotMinutes;
+  const cols = [...boardEl.querySelectorAll(".day-col")];
+  const el = drag.el;
+
+  // העמודה (היום) הקרובה ביותר לאצבע
+  const col = drag.mode === "resize"
+    ? el.parentElement
+    : cols.reduce((best, c) => {
+        const r = c.getBoundingClientRect(), br = best.getBoundingClientRect();
+        return Math.abs(drag.x - (r.left + r.right) / 2) < Math.abs(drag.x - (br.left + br.right) / 2) ? c : best;
+      });
+  const colRect = col.getBoundingClientRect();
+  const pxPerMin = colRect.height / ((rangeEnd - rangeStart) || 1);
+  const dayIndex = cols.indexOf(col);
+
+  // שעה (בדקות) לפי מיקום האצבע, מעוגלת למשבצת
+  const minuteAt = (y) => rangeStart + Math.round((y - colRect.top) / pxPerMin / grid) * grid;
+
+  let start = toMinutes(drag.block.start);
+  let end = toMinutes(drag.block.end);
+  if (drag.mode === "move") {
+    start = minuteAt(drag.y - drag.grabOffsetY);
+    start = Math.min(Math.max(start, rangeStart), Math.max(rangeStart, rangeEnd - drag.duration));
+    end = Math.min(start + drag.duration, rangeEnd);
+    if (el.parentElement !== col) col.appendChild(el);
+    el.style.insetInlineStart = "1px";   // בזמן גרירה הבלוק תופס את כל רוחב העמודה
+    el.style.width = "calc(100% - 2px)";
+  } else {
+    end = Math.min(Math.max(minuteAt(drag.y - drag.grabOffsetY), start + grid), rangeEnd);
+  }
+
+  const visibleStart = Math.max(start, rangeStart);
+  el.style.top = `calc(var(--slot-h) / 15 * ${visibleStart - rangeStart})`;
+  el.style.height = `calc(var(--slot-h) / 15 * ${end - visibleStart})`;
+
+  drag.target = { date: dateKey(addDays(weekStart, dayIndex)), start: toHHMM(start), end: toHHMM(end) };
+  showDragTip(`${DAY_NAMES[dayIndex]} <span dir="ltr">${drag.target.start}–${drag.target.end}</span>`);
+}
+
+function showDragTip(html) {
+  dragTip.innerHTML = html;
+  dragTip.hidden = false;
+  const w = dragTip.offsetWidth;
+  const left = Math.min(Math.max(drag.x - w / 2, 6), window.innerWidth - w - 6);
+  const top = Math.max(drag.y - 64, document.querySelector(".top").getBoundingClientRect().bottom + 4);
+  dragTip.style.left = `${left}px`;
+  dragTip.style.top = `${top}px`;
+}
+
+// גלילה אוטומטית כשגוררים קרוב לקצה העליון או התחתון של המסך
+function autoScrollTick() {
+  if (!drag || !drag.active) return;
+  const topEdge = document.querySelector(".top").getBoundingClientRect().bottom;
+  let dy = 0;
+  if (drag.y < topEdge + EDGE_ZONE) dy = -Math.ceil(14 * Math.min(1, (topEdge + EDGE_ZONE - drag.y) / EDGE_ZONE));
+  else if (drag.y > window.innerHeight - EDGE_ZONE) dy = Math.ceil(14 * Math.min(1, (drag.y - (window.innerHeight - EDGE_ZONE)) / EDGE_ZONE));
+  if (dy) {
+    window.scrollBy(0, dy);
+    updateDrag(); // האצבע במקום, הלוח זז — מחשבים מחדש
+  }
+  drag.raf = requestAnimationFrame(autoScrollTick);
+}
+
+// שחרור: שומרים את המיקום החדש
+function onDragEnd(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  if (drag.active && drag.target) {
+    const { block, target } = drag;
+    if (target.date !== block.date || target.start !== block.start || target.end !== block.end) {
+      Object.assign(block, target);
+      saveData();
+    }
+    holdClick();
+    endDrag();
+    render();
+    return;
+  }
+  endDrag();
+}
+
+// ביטול (Escape או שהדפדפן לקח את המחווה): הבלוק חוזר למקומו
+function onDragCancel(e) {
+  if (!drag || (e && e.pointerId !== drag.pointerId)) return;
+  const wasActive = drag.active;
+  endDrag();
+  if (wasActive) { holdClick(); render(); }
+}
+
+// מנקה את מצב הגרירה
+function endDrag() {
+  if (!drag) return;
+  clearTimeout(drag.timer);
+  cancelAnimationFrame(drag.raf);
+  drag.el.classList.remove("dragging");
+  document.body.classList.remove("is-dragging");
+  dragTip.hidden = true;
+  window.removeEventListener("pointermove", onDragMove);
+  window.removeEventListener("pointerup", onDragEnd);
+  window.removeEventListener("pointercancel", onDragCancel);
+  drag = null;
+}
+
+// אחרי גרירה הדפדפן שולח גם "לחיצה" — מתעלמים ממנה כדי לא לפתוח את חלון העריכה
+function holdClick() {
+  suppressClick = true;
+  setTimeout(() => { suppressClick = false; }, 150);
+}
+
+// באמצע גרירה במגע — לא נותנים לדפדפן לגלול את הדף מתחת לאצבע
+document.addEventListener("touchmove", (e) => {
+  if (drag && drag.active) e.preventDefault();
+}, { passive: false });
+
+// לחיצה ארוכה על בלוק: בלי תפריט הקשר ובלי בחירת טקסט
+boardEl.addEventListener("contextmenu", (e) => { if (e.target.closest(".block")) e.preventDefault(); });
+boardEl.addEventListener("selectstart", (e) => { if (e.target.closest && e.target.closest(".block")) e.preventDefault(); });
+
 // ---------- לחיצות על הלוח ----------
 
-document.getElementById("board").addEventListener("click", (e) => {
+boardEl.addEventListener("click", (e) => {
+  if (suppressClick) return;
   const blockEl = e.target.closest(".block");
   if (blockEl) {
     openModal({ block: data.blocks.find((b) => b.id === blockEl.dataset.id) });
@@ -469,6 +712,10 @@ document.getElementById("board").addEventListener("click", (e) => {
 // סגירת החלון: כפתור "ביטול", לחיצה על הרקע או Escape
 document.getElementById("btn-cancel").addEventListener("click", closeModal);
 modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (drag) onDragCancel();          // באמצע גרירה: מבטלים אותה
+  else if (!modal.hidden) closeModal();
+});
 
 render();
